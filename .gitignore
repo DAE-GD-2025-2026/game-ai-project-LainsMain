@@ -801,3 +801,10 @@ FodyWeavers.xsd
 # Ignoring diversion related files
 .dvignore
 /.diversion
+
+### Claude Code ###
+.claude/
+
+### Misc ###
+*.log
+*.dmp

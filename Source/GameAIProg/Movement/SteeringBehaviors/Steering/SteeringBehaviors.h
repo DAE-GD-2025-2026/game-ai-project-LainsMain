@@ -72,3 +72,23 @@ protected:
 	float TargetRadius{10.f};
 	float OriginalMaxSpeed{0.f};
 };
+
+//FACE
+class Face : public ISteeringBehavior
+{
+public:
+	Face() = default;
+	virtual ~Face() = default;
+
+	SteeringOutput CalculateSteering(float DeltaT, ASteeringAgent& Agent) override;
+};
+
+//PURSUIT
+class Pursuit : public Seek
+{
+public:
+	Pursuit() = default;
+	virtual ~Pursuit() = default;
+
+	SteeringOutput CalculateSteering(float DeltaT, ASteeringAgent& Agent) override;
+};

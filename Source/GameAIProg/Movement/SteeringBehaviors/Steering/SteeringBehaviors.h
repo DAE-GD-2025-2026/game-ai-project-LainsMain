@@ -36,4 +36,18 @@ public:
 	virtual ~Seek() = default;
 
 	SteeringOutput CalculateSteering(float DeltaT, ASteeringAgent& Agent) override;
+
+protected:
+	float StopRadius{10.f};
+};
+
+//FLEE
+//****
+class Flee : public Seek
+{
+public:
+	Flee() = default;
+	virtual ~Flee() = default;
+
+	SteeringOutput CalculateSteering(float DeltaT, ASteeringAgent& Agent) override;
 };

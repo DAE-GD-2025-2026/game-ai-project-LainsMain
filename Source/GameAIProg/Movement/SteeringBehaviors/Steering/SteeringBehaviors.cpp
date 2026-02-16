@@ -7,7 +7,15 @@ SteeringOutput Seek::CalculateSteering(float DeltaT, ASteeringAgent& Agent)
 {
 	SteeringOutput steering{};
 	steering.LinearVelocity = Target.Position - Agent.GetPosition();
-	steering.LinearVelocity.Normalize();
+
+	float Distance = steering.LinearVelocity.Size();
+	if (Distance < StopRadius)
+	{
+		steering.LinearVelocity = FVector2D::ZeroVector;
+		return steering;
+	}
+
+	steering.LinearVelocity /= Distance; // normalize
 	steering.LinearVelocity *= Agent.GetMaxLinearSpeed();
 	return steering;
 }

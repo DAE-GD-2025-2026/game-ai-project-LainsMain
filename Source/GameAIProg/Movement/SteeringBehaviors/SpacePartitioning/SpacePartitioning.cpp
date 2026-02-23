@@ -156,3 +156,195 @@ bool CellSpace::DoRectsOverlap(FRect const & RectA, FRect const & RectB)
 	if (RectA.Max.Y < RectB.Min.Y || RectA.Min.Y > RectB.Max.Y) return false;
 	return true;
 }
+
+// --- QuadTree ---
+// ----------------
+QuadTree::QuadTree(UWorld* pWorld, FRect Bounds, int MaxEntities, int MaxAgentsPerNode, int MaxDepth)
+	: pWorld{pWorld}
+	, MaxAgentsPerNode{MaxAgentsPerNode}
+	, MaxDepth{MaxDepth}
+{
+	Neighbors.SetNum(MaxEntities);
+	Root = std::make_unique<Node>();
+	Root->Bounds = Bounds;
+	Root->Depth = 0;
+}
+
+void QuadTree::Clear()
+{
+	FRect bounds = Root->Bounds;
+	Root = std::make_unique<Node>();
+	Root->Bounds = bounds;
+	Root->Depth = 0;
+}
+
+void QuadTree::Subdivide(Node& node)
+{
+	float midX = (node.Bounds.Min.X + node.Bounds.Max.X) * 0.5f;
+	float midY = (node.Bounds.Min.Y + node.Bounds.Max.Y) * 0.5f;
+
+	for (int i = 0; i < 4; ++i)
+	{
+		node.Children[i] = std::make_unique<Node>();
+		node.Children[i]->Depth = node.Depth + 1;
+	}
+
+	// NW: top-left
+	node.Children[0]->Bounds = { {node.Bounds.Min.X, midY}, {midX, node.Bounds.Max.Y} };
+	// NE: top-right
+	node.Children[1]->Bounds = { {midX, midY}, {node.Bounds.Max.X, node.Bounds.Max.Y} };
+	// SW: bottom-left
+	node.Children[2]->Bounds = { {node.Bounds.Min.X, node.Bounds.Min.Y}, {midX, midY} };
+	// SE: bottom-right
+	node.Children[3]->Bounds = { {midX, node.Bounds.Min.Y}, {node.Bounds.Max.X, midY} };
+
+	// redistribute agents into children
+	for (ASteeringAgent* agent : node.Agents)
+	{
+		for (int i = 0; i < 4; ++i)
+		{
+			FVector2D pos = agent->GetPosition();
+			if (pos.X >= node.Children[i]->Bounds.Min.X && pos.X < node.Children[i]->Bounds.Max.X &&
+				pos.Y >= node.Children[i]->Bounds.Min.Y && pos.Y < node.Children[i]->Bounds.Max.Y)
+			{
+				InsertIntoNode(*node.Children[i], agent);
+				break;
+			}
+		}
+	}
+	node.Agents.clear();
+}
+
+void QuadTree::Insert(ASteeringAgent* Agent)
+{
+	if (!Agent || !IsValid(Agent)) return;
+	InsertIntoNode(*Root, Agent);
+}
+
+void QuadTree::InsertIntoNode(Node& node, ASteeringAgent* Agent)
+{
+	// clamp: if agent is outside this node's bounds, don't insert
+	FVector2D pos = Agent->GetPosition();
+	if (pos.X < node.Bounds.Min.X || pos.X > node.Bounds.Max.X ||
+		pos.Y < node.Bounds.Min.Y || pos.Y > node.Bounds.Max.Y)
+		return;
+
+	if (node.IsLeaf())
+	{
+		node.Agents.push_back(Agent);
+
+		// subdivide if over capacity and not at max depth
+		if (static_cast<int>(node.Agents.size()) > MaxAgentsPerNode && node.Depth < MaxDepth)
+			Subdivide(node);
+	}
+	else
+	{
+		// insert into the correct child
+		for (int i = 0; i < 4; ++i)
+		{
+			if (pos.X >= node.Children[i]->Bounds.Min.X && pos.X < node.Children[i]->Bounds.Max.X &&
+				pos.Y >= node.Children[i]->Bounds.Min.Y && pos.Y < node.Children[i]->Bounds.Max.Y)
+			{
+				InsertIntoNode(*node.Children[i], Agent);
+				return;
+			}
+		}
+		// edge case: agent exactly on max boundary — put in last child
+		InsertIntoNode(*node.Children[3], Agent);
+	}
+}
+
+void QuadTree::RegisterNeighbors(ASteeringAgent& Agent, float QueryRadius)
+{
+	NrOfNeighbors = 0;
+	LastQueriedLeaves.clear();
+
+	FVector2D agentPos = Agent.GetPosition();
+	FRect queryRect;
+	queryRect.Min = { agentPos.X - QueryRadius, agentPos.Y - QueryRadius };
+	queryRect.Max = { agentPos.X + QueryRadius, agentPos.Y + QueryRadius };
+
+	QueryNode(*Root, queryRect, agentPos, QueryRadius, &Agent);
+}
+
+void QuadTree::QueryNode(const Node& node, const FRect& QueryRect, const FVector2D& AgentPos,
+	float QueryRadius, ASteeringAgent* ExcludeAgent)
+{
+	// prune: skip if this node doesn't overlap the query area
+	if (!DoRectsOverlap(node.Bounds, QueryRect)) return;
+
+	if (node.IsLeaf())
+	{
+		LastQueriedLeaves.push_back(node.Bounds);
+
+		for (ASteeringAgent* other : node.Agents)
+		{
+			if (other == ExcludeAgent || !IsValid(other)) continue;
+			float dist = FVector2D::Distance(AgentPos, other->GetPosition());
+			if (dist < QueryRadius)
+			{
+				Neighbors[NrOfNeighbors] = other;
+				++NrOfNeighbors;
+			}
+		}
+	}
+	else
+	{
+		for (int i = 0; i < 4; ++i)
+			QueryNode(*node.Children[i], QueryRect, AgentPos, QueryRadius, ExcludeAgent);
+	}
+}
+
+void QuadTree::RenderCells(const std::vector<FRect>& QueriedLeaves) const
+{
+	RenderNode(*Root, QueriedLeaves);
+}
+
+void QuadTree::RenderNode(const Node& node, const std::vector<FRect>& QueriedLeaves) const
+{
+	if (node.IsLeaf())
+	{
+		// check if this leaf was queried
+		bool bHighlighted = false;
+		for (const FRect& qr : QueriedLeaves)
+		{
+			if (qr.Min == node.Bounds.Min && qr.Max == node.Bounds.Max)
+			{
+				bHighlighted = true;
+				break;
+			}
+		}
+
+		FColor color = bHighlighted ? FColor::Red : FColor::Blue;
+		float thickness = bHighlighted ? 8.f : 5.f;
+		DrawRect(node.Bounds, color, thickness);
+	}
+	else
+	{
+		// draw this node's bounds in blue, then recurse
+		DrawRect(node.Bounds, FColor::Blue, 5.f);
+		for (int i = 0; i < 4; ++i)
+			RenderNode(*node.Children[i], QueriedLeaves);
+	}
+}
+
+void QuadTree::DrawRect(const FRect& Rect, FColor Color, float Thickness) const
+{
+	const float z = 91.f;
+	FVector bl{Rect.Min.X, Rect.Min.Y, z};
+	FVector tl{Rect.Min.X, Rect.Max.Y, z};
+	FVector tr{Rect.Max.X, Rect.Max.Y, z};
+	FVector br{Rect.Max.X, Rect.Min.Y, z};
+
+	DrawDebugLine(pWorld, bl, tl, Color, false, -1.f, SDPG_Foreground, Thickness);
+	DrawDebugLine(pWorld, tl, tr, Color, false, -1.f, SDPG_Foreground, Thickness);
+	DrawDebugLine(pWorld, tr, br, Color, false, -1.f, SDPG_Foreground, Thickness);
+	DrawDebugLine(pWorld, br, bl, Color, false, -1.f, SDPG_Foreground, Thickness);
+}
+
+bool QuadTree::DoRectsOverlap(const FRect& A, const FRect& B)
+{
+	if (A.Max.X < B.Min.X || A.Min.X > B.Max.X) return false;
+	if (A.Max.Y < B.Min.Y || A.Min.Y > B.Max.Y) return false;
+	return true;
+}

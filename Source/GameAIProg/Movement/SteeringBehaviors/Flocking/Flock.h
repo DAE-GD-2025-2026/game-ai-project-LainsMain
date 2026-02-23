@@ -39,6 +39,7 @@ public:
 	bool& GetDebugRenderNeighborhood() { return DebugRenderNeighborhood; }
 	bool& GetDebugRenderPartitions() { return DebugRenderPartitions; }
 	bool& GetUseSpacePartitioning() { return bUseSpacePartitioning; }
+	bool& GetUseHISP() { return bUseHISP; }
 	TArray<std::unique_ptr<BlendedSteering>>& GetBlendedSteeringPerAgent() { return pBlendedSteeringPerAgent; }
 
 private:
@@ -50,7 +51,9 @@ private:
 
 	// spatial partitioning
 	bool bUseSpacePartitioning{false};
+	bool bUseHISP{false};
 	std::unique_ptr<CellSpace> pCellSpace{};
+	std::unique_ptr<QuadTree> pQuadTree{};
 	TArray<FVector2D> OldPositions{};
 
 	// unified neighbor storage (both paths write here)
@@ -85,4 +88,5 @@ private:
 	void RenderNeighborhood();
 	void RegisterNeighbors_BruteForce(ASteeringAgent* const Agent);
 	void RegisterNeighbors_Partitioned(ASteeringAgent* const Agent);
+	void RegisterNeighbors_QuadTree(ASteeringAgent* const Agent);
 };

@@ -49,6 +49,12 @@ Flock::Flock(
 		}
 	}
 
+	// create quadtree for hierarchical spatial partitioning
+	FRect quadBounds;
+	quadBounds.Min = { -WorldSize * 0.5f, -WorldSize * 0.5f };
+	quadBounds.Max = {  WorldSize * 0.5f,  WorldSize * 0.5f };
+	pQuadTree = std::make_unique<QuadTree>(pWorld, quadBounds, FlockSize, 4, 8);
+
 	// create shared behaviors (same state for all agents is fine)
 	pCohesionBehavior   = std::make_unique<Cohesion>(this);
 	pSeparationBehavior = std::make_unique<Separation>(this);
@@ -102,14 +108,22 @@ void Flock::Tick(float DeltaTime)
 		pEvadeBehavior->SetTarget(evadeTarget);
 	}
 
+	// rebuild quadtree from scratch each frame (simplest for moving agents)
+	if (bUseHISP && pQuadTree)
+	{
+		pQuadTree->Clear();
+		for (ASteeringAgent* agent : Agents)
+			if (IsValid(agent)) pQuadTree->Insert(agent);
+	}
+
 	for (int i = 0; i < Agents.Num(); ++i)
 	{
 		if (!IsValid(Agents[i])) continue;
 		RegisterNeighbors(Agents[i]);
 		Agents[i]->Tick(DeltaTime);
 
-		// update cell after agent moved
-		if (bUseSpacePartitioning)
+		// update flat grid cell after agent moved (only when using flat SP)
+		if (bUseSpacePartitioning && !bUseHISP)
 		{
 			pCellSpace->UpdateAgentCell(*Agents[i], OldPositions[i]);
 			OldPositions[i] = Agents[i]->GetPosition();
@@ -119,7 +133,9 @@ void Flock::Tick(float DeltaTime)
 
 void Flock::RegisterNeighbors(ASteeringAgent* const Agent)
 {
-	if (bUseSpacePartitioning)
+	if (bUseHISP)
+		RegisterNeighbors_QuadTree(Agent);
+	else if (bUseSpacePartitioning)
 		RegisterNeighbors_Partitioned(Agent);
 	else
 		RegisterNeighbors_BruteForce(Agent);
@@ -153,6 +169,17 @@ void Flock::RegisterNeighbors_Partitioned(ASteeringAgent* const pAgent)
 		Neighbors[i] = cellNeighbors[i];
 }
 
+void Flock::RegisterNeighbors_QuadTree(ASteeringAgent* const pAgent)
+{
+	pQuadTree->RegisterNeighbors(*pAgent, NeighborhoodRadius);
+
+	// copy results to unified neighbor storage
+	NrOfNeighbors = pQuadTree->GetNrOfNeighbors();
+	const auto& qtNeighbors = pQuadTree->GetNeighbors();
+	for (int i = 0; i < NrOfNeighbors; ++i)
+		Neighbors[i] = qtNeighbors[i];
+}
+
 void Flock::RenderDebug()
 {
 	if (DebugRenderSteering)
@@ -172,18 +199,29 @@ void Flock::RenderDebug()
 	if (DebugRenderNeighborhood)
 		RenderNeighborhood();
 
-	if (DebugRenderPartitions && pCellSpace)
+	if (DebugRenderPartitions)
 	{
-		// only show red highlights when SP is active and neighborhood debug triggers a query
-		std::vector<int> highlighted;
-		if (bUseSpacePartitioning && Agents.Num() > 0 && IsValid(Agents[0]))
+		if (bUseHISP && pQuadTree)
 		{
-			// re-query agent 0 so LastQueriedCells is fresh for this frame
-			pCellSpace->RegisterNeighbors(*Agents[0], NeighborhoodRadius);
-			highlighted = pCellSpace->GetLastQueriedCells();
+			// re-query agent 0 to get fresh queried leaves for red highlighting
+			std::vector<FRect> highlighted;
+			if (Agents.Num() > 0 && IsValid(Agents[0]))
+			{
+				pQuadTree->RegisterNeighbors(*Agents[0], NeighborhoodRadius);
+				highlighted = pQuadTree->GetLastQueriedLeaves();
+			}
+			pQuadTree->RenderCells(highlighted);
 		}
-
-		pCellSpace->RenderCells(highlighted);
+		else if (pCellSpace)
+		{
+			std::vector<int> highlighted;
+			if (bUseSpacePartitioning && Agents.Num() > 0 && IsValid(Agents[0]))
+			{
+				pCellSpace->RegisterNeighbors(*Agents[0], NeighborhoodRadius);
+				highlighted = pCellSpace->GetLastQueriedCells();
+			}
+			pCellSpace->RenderCells(highlighted);
+		}
 	}
 }
 

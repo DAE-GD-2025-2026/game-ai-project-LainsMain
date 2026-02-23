@@ -109,6 +109,7 @@ void ALevel_SpacePartitioning::Tick(float DeltaTime)
 		if (pFlock)
 		{
 			ImGui::Checkbox("Use Space Partitioning", &pFlock->GetUseSpacePartitioning());
+			ImGui::Checkbox("Use HISP", &pFlock->GetUseHISP());
 			ImGui::Checkbox("Debug render neighborhood", &pFlock->GetDebugRenderNeighborhood());
 			ImGui::Checkbox("Debug render steering", &pFlock->GetDebugRenderSteering());
 			ImGui::Checkbox("Debug render partitions", &pFlock->GetDebugRenderPartitions());

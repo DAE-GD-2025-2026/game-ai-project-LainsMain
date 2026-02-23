@@ -44,6 +44,11 @@ public:
 
 	void SetTarget_Seek(FSteeringParams const & Target);
 
+	// public access for external ImGui rendering (Level_SpacePartitioning)
+	bool& GetDebugRenderSteering() { return DebugRenderSteering; }
+	bool& GetDebugRenderNeighborhood() { return DebugRenderNeighborhood; }
+	TArray<std::unique_ptr<BlendedSteering>>& GetBlendedSteeringPerAgent() { return pBlendedSteeringPerAgent; }
+
 private:
 	// For debug rendering purposes
 	UWorld* pWorld{nullptr};

@@ -1,4 +1,5 @@
 #include "Flock.h"
+#include "Movement/SteeringBehaviors/SpacePartitioning/SpacePartitioning.h"
 #include "FlockingSteeringBehaviors.h"
 #include "Shared/ImGuiHelpers.h"
 #include "DrawDebugHelpers.h"
@@ -20,8 +21,10 @@ Flock::Flock(
 	Agents.SetNum(FlockSize);
 	Neighbors.SetNum(FlockSize);
 
-	// spawn agents at random posiitons within the world bounds
+	// spawn agents at random positions within the world bounds
 	float halfSize = WorldSize * 0.5f;
+	FActorSpawnParameters spawnParams;
+	spawnParams.SpawnCollisionHandlingOverride = ESpawnActorCollisionHandlingMethod::AlwaysSpawn;
 	for (int i = 0; i < FlockSize; ++i)
 	{
 		FVector spawnPos{
@@ -29,14 +32,15 @@ Flock::Flock(
 			FMath::RandRange(-halfSize, halfSize),
 			90.f
 		};
-		Agents[i] = pWorld->SpawnActor<ASteeringAgent>(AgentClass, spawnPos, FRotator::ZeroRotator);
+		Agents[i] = pWorld->SpawnActor<ASteeringAgent>(AgentClass, spawnPos, FRotator::ZeroRotator, spawnParams);
 		if (IsValid(Agents[i]))
 			Agents[i]->SetActorTickEnabled(false); // manually driven from Flock::Tick
 	}
 
-	// create spatial partitioning grid (25x25)
-	int nrCells = 25;
-	pCellSpace = std::make_unique<CellSpace>(pWorld, WorldSize, WorldSize, nrCells, nrCells, FlockSize);
+	// create spatial partitioning grid (12x12), slightly oversized to reduce agents being skipped near edges
+	int nrCells = 12;
+	float gridSize = WorldSize * 1.1f;
+	pCellSpace = std::make_unique<CellSpace>(pWorld, gridSize, gridSize, nrCells, nrCells, FlockSize);
 	OldPositions.SetNum(FlockSize);
 
 	// add all agents to the cell space and store initial positions
@@ -50,9 +54,10 @@ Flock::Flock(
 	}
 
 	// create quadtree for hierarchical spatial partitioning
+	float halfWorld = WorldSize * 0.5f;
 	FRect quadBounds;
-	quadBounds.Min = { -WorldSize * 0.5f, -WorldSize * 0.5f };
-	quadBounds.Max = {  WorldSize * 0.5f,  WorldSize * 0.5f };
+	quadBounds.Min = { -halfWorld, -halfWorld };
+	quadBounds.Max = {  halfWorld,  halfWorld };
 	pQuadTree = std::make_unique<QuadTree>(pWorld, quadBounds, FlockSize, 4, 8);
 
 	// create shared behaviors (same state for all agents is fine)
@@ -122,8 +127,8 @@ void Flock::Tick(float DeltaTime)
 		RegisterNeighbors(Agents[i]);
 		Agents[i]->Tick(DeltaTime);
 
-		// update flat grid cell after agent moved (only when using flat SP)
-		if (bUseSpacePartitioning && !bUseHISP)
+		// always update flat grid cells so debug counts stay correct
+		if (pCellSpace)
 		{
 			pCellSpace->UpdateAgentCell(*Agents[i], OldPositions[i]);
 			OldPositions[i] = Agents[i]->GetPosition();
@@ -303,10 +308,22 @@ void Flock::RenderNeighborhood()
 	RegisterNeighbors(Agents[0]);
 
 	FVector firstPos = Agents[0]->GetActorLocation();
+	FVector2D agentPos2D = Agents[0]->GetPosition();
 
 	// yellow circle showing neighborhood radius around first agent
 	DrawDebugCircle(pWorld, firstPos, NeighborhoodRadius, 32,
 		FColor::Yellow, false, -1.f, 0, 3.f, FVector::YAxisVector, FVector::XAxisVector);
+
+	// query bounding box around the agent
+	const float z = 91.f;
+	FVector bl{agentPos2D.X - NeighborhoodRadius, agentPos2D.Y - NeighborhoodRadius, z};
+	FVector tl{agentPos2D.X - NeighborhoodRadius, agentPos2D.Y + NeighborhoodRadius, z};
+	FVector tr{agentPos2D.X + NeighborhoodRadius, agentPos2D.Y + NeighborhoodRadius, z};
+	FVector br{agentPos2D.X + NeighborhoodRadius, agentPos2D.Y - NeighborhoodRadius, z};
+	DrawDebugLine(pWorld, bl, tl, FColor::Orange, false, -1.f, 0, 3.f);
+	DrawDebugLine(pWorld, tl, tr, FColor::Orange, false, -1.f, 0, 3.f);
+	DrawDebugLine(pWorld, tr, br, FColor::Orange, false, -1.f, 0, 3.f);
+	DrawDebugLine(pWorld, br, bl, FColor::Orange, false, -1.f, 0, 3.f);
 
 	// green lines to each current neighbor
 	for (int i = 0; i < NrOfNeighbors; ++i)

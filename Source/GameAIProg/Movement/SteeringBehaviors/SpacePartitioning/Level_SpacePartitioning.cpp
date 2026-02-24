@@ -3,6 +3,7 @@
 #include "Level_SpacePartitioning.h"
 #include "imgui.h"
 #include "Shared/ImGuiHelpers.h"
+#include "DrawDebugHelpers.h"
 
 
 ALevel_SpacePartitioning::ALevel_SpacePartitioning()
@@ -13,47 +14,97 @@ ALevel_SpacePartitioning::ALevel_SpacePartitioning()
 void ALevel_SpacePartitioning::BeginPlay()
 {
 	Super::BeginPlay();
-	RebuildFlock();
+	TrimWorld->SetTrimWorldSize(WorldSize);
+	TrimWorld->bShouldTrimWorld = true;
+	RebuildAgents();
 }
 
-void ALevel_SpacePartitioning::RebuildFlock()
+void ALevel_SpacePartitioning::RebuildAgents()
 {
-	TrimWorld->SetTrimWorldSize(3000.f);
-	TrimWorld->bShouldTrimWorld = true;
+	// destroy old agents
+	for (ASteeringAgent* agent : Agents)
+		if (IsValid(agent)) agent->Destroy();
+	Agents.Empty();
+	Behaviors.Empty();
+	OldPositions.Empty();
 
-	// destroy old evade agent if valid
-	if (IsValid(pAgentToEvade))
+	AgentCount = PendingAgentCount;
+	float halfSize = WorldSize * 0.5f;
+
+	Agents.SetNum(AgentCount);
+	Behaviors.SetNum(AgentCount);
+	OldPositions.SetNum(AgentCount);
+	Neighbors.SetNum(AgentCount);
+
+	// spawn agents at random positions
+	for (int i = 0; i < AgentCount; ++i)
 	{
-		pAgentToEvade->Destroy();
-		pAgentToEvade = nullptr;
+		FVector spawnPos{
+			FMath::RandRange(-halfSize, halfSize),
+			FMath::RandRange(-halfSize, halfSize),
+			90.f
+		};
+		Agents[i] = GetWorld()->SpawnActor<ASteeringAgent>(SteeringAgentClass, spawnPos, FRotator::ZeroRotator);
+		if (IsValid(Agents[i]))
+			OldPositions[i] = Agents[i]->GetPosition();
 	}
-	pEvadeAgentWander.reset();
 
-	// destroy old flock (destroys all flock agents)
-	pFlock.Reset();
+	// create flat 25x25 grid
+	pCellSpace = std::make_unique<CellSpace>(GetWorld(), WorldSize, WorldSize, 25, 25, AgentCount);
+	for (int i = 0; i < AgentCount; ++i)
+		if (IsValid(Agents[i])) pCellSpace->AddAgent(*Agents[i]);
 
-	// spawn evade agent
-	UClass* evadeClass = LoadObject<UClass>(nullptr, TEXT("/Game/Movement/Steering/BP_EvadeAgent.BP_EvadeAgent_C"));
-	if (!evadeClass) evadeClass = SteeringAgentClass; // fallback
-	pAgentToEvade = GetWorld()->SpawnActor<ASteeringAgent>(evadeClass, FVector{0.f, 0.f, 90.f}, FRotator::ZeroRotator);
-	if (IsValid(pAgentToEvade))
+	// create quadtree
+	FRect quadBounds;
+	quadBounds.Min = { -halfSize, -halfSize };
+	quadBounds.Max = {  halfSize,  halfSize };
+	pQuadTree = std::make_unique<QuadTree>(GetWorld(), quadBounds, AgentCount, 4, 8);
+
+	SetAllAgentsBehavior();
+}
+
+void ALevel_SpacePartitioning::SetAllAgentsBehavior()
+{
+	// restore max speed if switching away from arrive
+	if (PreviousBehavior == static_cast<int>(BehaviorTypes::Arrive))
 	{
-		pEvadeAgentWander = std::make_unique<Wander>();
-		pAgentToEvade->SetSteeringBehavior(pEvadeAgentWander.get());
+		for (int i = 0; i < AgentCount; ++i)
+		{
+			if (!IsValid(Agents[i]) || !Behaviors[i]) continue;
+			Arrive* arrive = Behaviors[i]->As<Arrive>();
+			if (arrive && arrive->GetOriginalMaxSpeed() > 0.f)
+				Agents[i]->SetMaxLinearSpeed(arrive->GetOriginalMaxSpeed());
+		}
 	}
+	PreviousBehavior = SelectedBehavior;
 
-	// apply pending size
-	FlockSize = PendingFlockSize;
+	for (int i = 0; i < AgentCount; ++i)
+	{
+		if (!IsValid(Agents[i])) continue;
 
-	pFlock = TUniquePtr<Flock>(
-		new Flock(
-			GetWorld(),
-			SteeringAgentClass,
-			FlockSize,
-			TrimWorld->GetTrimWorldSize(),
-			pAgentToEvade,
-			true)
-	);
+		Behaviors[i].reset();
+
+		switch (static_cast<BehaviorTypes>(SelectedBehavior))
+		{
+		case BehaviorTypes::Wander:
+			Behaviors[i] = std::make_unique<Wander>();
+			break;
+		case BehaviorTypes::Seek:
+			Behaviors[i] = std::make_unique<Seek>();
+			break;
+		case BehaviorTypes::Flee:
+			Behaviors[i] = std::make_unique<Flee>();
+			break;
+		case BehaviorTypes::Arrive:
+			Behaviors[i] = std::make_unique<Arrive>();
+			break;
+		default:
+			Behaviors[i] = std::make_unique<Wander>();
+			break;
+		}
+
+		Agents[i]->SetSteeringBehavior(Behaviors[i].get());
+	}
 }
 
 void ALevel_SpacePartitioning::Tick(float DeltaTime)
@@ -84,70 +135,181 @@ void ALevel_SpacePartitioning::Tick(float DeltaTime)
 		ImGui::Indent();
 		ImGui::Text("%.3f ms/frame", 1000.0f / ImGui::GetIO().Framerate);
 		ImGui::Text("%.1f FPS", ImGui::GetIO().Framerate);
-		ImGui::Text("Agents: %d", FlockSize);
+		ImGui::Text("Agents: %d", AgentCount);
 		ImGui::Unindent();
 
 		ImGui::Spacing();
 		ImGui::Separator();
 		ImGui::Spacing();
 
-		ImGui::Text("Flocking");
+		ImGui::Text("Space Partitioning");
 		ImGui::Spacing();
 
-		// flock size control
-		ImGui::SliderInt("Flock Size", &PendingFlockSize, 10, 2000);
-		if (PendingFlockSize != FlockSize)
+		// agent count slider + apply
+		ImGui::SliderInt("Agent Count", &PendingAgentCount, 10, 2000);
+		if (PendingAgentCount != AgentCount)
 		{
 			if (ImGui::Button("Apply"))
-				RebuildFlock();
+				RebuildAgents();
 			ImGui::SameLine();
-			ImGui::TextDisabled("(%d -> %d)", FlockSize, PendingFlockSize);
+			ImGui::TextDisabled("(%d -> %d)", AgentCount, PendingAgentCount);
 		}
 
 		ImGui::Spacing();
 
-		if (pFlock)
+		// behavior dropdown
+		if (ImGui::Combo("Behavior", &SelectedBehavior, "Wander\0Seek\0Flee\0Arrive\0"))
+			SetAllAgentsBehavior();
+
+		ImGui::Spacing();
+
+		// spatial partitioning toggles
+		bool prevUseSP = bUseSpacePartitioning;
+		ImGui::Checkbox("Use Space Partitioning", &bUseSpacePartitioning);
+		// re-add agents to cellspace when toggling on
+		if (bUseSpacePartitioning && !prevUseSP && pCellSpace)
 		{
-			ImGui::Checkbox("Use Space Partitioning", &pFlock->GetUseSpacePartitioning());
-			ImGui::Checkbox("Use HISP", &pFlock->GetUseHISP());
-			ImGui::Checkbox("Debug render neighborhood", &pFlock->GetDebugRenderNeighborhood());
-			ImGui::Checkbox("Debug render steering", &pFlock->GetDebugRenderSteering());
-			ImGui::Checkbox("Debug render partitions", &pFlock->GetDebugRenderPartitions());
-
-			ImGui::Spacing();
-			ImGui::Text("Behavior Weights");
-			ImGui::Spacing();
-
-			auto& blended = pFlock->GetBlendedSteeringPerAgent();
-			if (blended.Num() > 0 && blended[0])
+			pCellSpace->EmptyCells();
+			for (int i = 0; i < Agents.Num(); ++i)
 			{
-				auto& w0 = blended[0]->GetWeightedBehaviorsRef();
-
-				auto SetAllWeights = [&](int idx, float v)
+				if (IsValid(Agents[i]))
 				{
-					for (auto& blend : blended)
-						if (blend) blend->GetWeightedBehaviorsRef()[idx].Weight = v;
-				};
-
-				ImGuiHelpers::ImGuiSliderFloatWithSetter("Cohesion",   w0[0].Weight, 0.f, 1.f, [&](float v){ SetAllWeights(0, v); });
-				ImGuiHelpers::ImGuiSliderFloatWithSetter("Separation", w0[1].Weight, 0.f, 1.f, [&](float v){ SetAllWeights(1, v); });
-				ImGuiHelpers::ImGuiSliderFloatWithSetter("Alignment",  w0[2].Weight, 0.f, 1.f, [&](float v){ SetAllWeights(2, v); });
-				ImGuiHelpers::ImGuiSliderFloatWithSetter("Seek",       w0[3].Weight, 0.f, 1.f, [&](float v){ SetAllWeights(3, v); });
-				ImGuiHelpers::ImGuiSliderFloatWithSetter("Wander",     w0[4].Weight, 0.f, 1.f, [&](float v){ SetAllWeights(4, v); });
+					pCellSpace->AddAgent(*Agents[i]);
+					OldPositions[i] = Agents[i]->GetPosition();
+				}
 			}
 		}
+		ImGui::Checkbox("Use HISP", &bUseHISP);
+
+		ImGui::Spacing();
+
+		// debug toggles
+		ImGui::Checkbox("Debug render neighborhood", &bDebugRenderNeighborhood);
+		ImGui::Checkbox("Debug render steering", &bDebugRenderSteering);
+		ImGui::Checkbox("Debug render partitions", &bDebugRenderPartitions);
 
 		ImGui::End();
 	}
 #pragma endregion
 #endif
 
-	if (pFlock)
+	// set target for behaviors that need it
+	if (SelectedBehavior != static_cast<int>(BehaviorTypes::Wander))
 	{
-		pFlock->Tick(DeltaTime);
-		pFlock->RenderDebug();
+		for (int i = 0; i < AgentCount; ++i)
+		{
+			if (IsValid(Agents[i]) && Behaviors[i])
+				Behaviors[i]->SetTarget(MouseTarget);
+		}
+	}
 
-		if (bUseMouseTarget)
-			pFlock->SetTarget_Seek(MouseTarget);
+	// update quadtree (rebuild each frame)
+	if (bUseHISP && pQuadTree)
+	{
+		pQuadTree->Clear();
+		for (ASteeringAgent* agent : Agents)
+			if (IsValid(agent)) pQuadTree->Insert(agent);
+	}
+
+	// update flat grid cells
+	if (bUseSpacePartitioning && !bUseHISP && pCellSpace)
+	{
+		for (int i = 0; i < Agents.Num(); ++i)
+		{
+			if (!IsValid(Agents[i])) continue;
+			pCellSpace->UpdateAgentCell(*Agents[i], OldPositions[i]);
+			OldPositions[i] = Agents[i]->GetPosition();
+		}
+	}
+
+	RenderDebug();
+}
+
+void ALevel_SpacePartitioning::RegisterNeighbors(ASteeringAgent* Agent)
+{
+	if (bUseHISP && pQuadTree)
+	{
+		pQuadTree->RegisterNeighbors(*Agent, NeighborhoodRadius);
+		NrOfNeighbors = pQuadTree->GetNrOfNeighbors();
+		const auto& qtNeighbors = pQuadTree->GetNeighbors();
+		for (int i = 0; i < NrOfNeighbors; ++i)
+			Neighbors[i] = qtNeighbors[i];
+	}
+	else if (bUseSpacePartitioning && pCellSpace)
+	{
+		pCellSpace->RegisterNeighbors(*Agent, NeighborhoodRadius);
+		NrOfNeighbors = pCellSpace->GetNrOfNeighbors();
+		const auto& cellNeighbors = pCellSpace->GetNeighbors();
+		for (int i = 0; i < NrOfNeighbors; ++i)
+			Neighbors[i] = cellNeighbors[i];
+	}
+	else
+	{
+		// brute force
+		NrOfNeighbors = 0;
+		FVector2D agentPos = Agent->GetPosition();
+		for (ASteeringAgent* other : Agents)
+		{
+			if (other == Agent || !IsValid(other)) continue;
+			float dist = FVector2D::Distance(agentPos, other->GetPosition());
+			if (dist < NeighborhoodRadius)
+			{
+				Neighbors[NrOfNeighbors] = other;
+				++NrOfNeighbors;
+			}
+		}
+	}
+}
+
+void ALevel_SpacePartitioning::RenderDebug()
+{
+	if (bDebugRenderSteering)
+	{
+		for (ASteeringAgent* agent : Agents)
+		{
+			if (!IsValid(agent)) continue;
+			FVector agentPos = agent->GetActorLocation();
+			FVector2D vel2D = agent->GetLinearVelocity();
+			FVector velEnd = agentPos + FVector{vel2D.X, vel2D.Y, 0.f} * 0.3f;
+			DrawDebugLine(GetWorld(), agentPos, velEnd, FColor::Cyan, false, -1.f, 0, 3.f);
+			DrawDebugPoint(GetWorld(), velEnd, 8.f, FColor::Cyan, false, -1.f);
+		}
+	}
+
+	if (bDebugRenderNeighborhood && Agents.Num() > 0 && IsValid(Agents[0]))
+	{
+		RegisterNeighbors(Agents[0]);
+		FVector firstPos = Agents[0]->GetActorLocation();
+		DrawDebugCircle(GetWorld(), firstPos, NeighborhoodRadius, 32,
+			FColor::Yellow, false, -1.f, 0, 3.f, FVector::YAxisVector, FVector::XAxisVector);
+		for (int i = 0; i < NrOfNeighbors; ++i)
+		{
+			if (!IsValid(Neighbors[i])) continue;
+			DrawDebugLine(GetWorld(), firstPos, Neighbors[i]->GetActorLocation(), FColor::Green, false, -1.f, 0, 3.f);
+		}
+	}
+
+	if (bDebugRenderPartitions)
+	{
+		if (bUseHISP && pQuadTree)
+		{
+			std::vector<FRect> highlighted;
+			if (Agents.Num() > 0 && IsValid(Agents[0]))
+			{
+				pQuadTree->RegisterNeighbors(*Agents[0], NeighborhoodRadius);
+				highlighted = pQuadTree->GetLastQueriedLeaves();
+			}
+			pQuadTree->RenderCells(highlighted);
+		}
+		else if (pCellSpace)
+		{
+			std::vector<int> highlighted;
+			if (bUseSpacePartitioning && Agents.Num() > 0 && IsValid(Agents[0]))
+			{
+				pCellSpace->RegisterNeighbors(*Agents[0], NeighborhoodRadius);
+				highlighted = pCellSpace->GetLastQueriedCells();
+			}
+			pCellSpace->RenderCells(highlighted);
+		}
 	}
 }

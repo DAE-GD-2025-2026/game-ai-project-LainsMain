@@ -60,6 +60,7 @@ CellSpace::CellSpace(UWorld* pWorld, float Width, float Height, int Rows, int Co
 void CellSpace::AddAgent(ASteeringAgent& Agent)
 {
 	int idx = PositionToIndex(Agent.GetPosition());
+	if (idx < 0) return; // skip agents outside grid bounds
 	Cells[idx].Agents.push_back(&Agent);
 }
 
@@ -70,8 +71,10 @@ void CellSpace::UpdateAgentCell(ASteeringAgent& Agent, const FVector2D& OldPos)
 
 	if (oldIdx == newIdx) return;
 
-	Cells[oldIdx].Agents.remove(&Agent);
-	Cells[newIdx].Agents.push_back(&Agent);
+	if (oldIdx >= 0)
+		Cells[oldIdx].Agents.remove(&Agent);
+	if (newIdx >= 0)
+		Cells[newIdx].Agents.push_back(&Agent);
 }
 
 void CellSpace::RegisterNeighbors(ASteeringAgent& Agent, float QueryRadius)
@@ -116,6 +119,9 @@ void CellSpace::RenderCells(const std::vector<int>& HighlightedCells) const
 {
 	const float z = 91.f;
 
+	// flush old debug strings so we don't hit the engine cap
+	FlushDebugStrings(pWorld);
+
 	for (int i = 0; i < static_cast<int>(Cells.size()); ++i)
 	{
 		// check if this cell is in the highlighted set
@@ -135,6 +141,18 @@ void CellSpace::RenderCells(const std::vector<int>& HighlightedCells) const
 			FVector b{pts[(j + 1) % 4].X, pts[(j + 1) % 4].Y, z};
 			DrawDebugLine(pWorld, a, b, color, false, -1.f, SDPG_Foreground, thickness);
 		}
+
+		// draw agent count at center of cell
+		int count = static_cast<int>(Cells[i].Agents.size());
+		if (count > 0)
+		{
+			FVector center{
+				(Cells[i].BoundingBox.Min.X + Cells[i].BoundingBox.Max.X) * 0.5f,
+				(Cells[i].BoundingBox.Min.Y + Cells[i].BoundingBox.Max.Y) * 0.5f,
+				z
+			};
+			DrawDebugString(pWorld, center, FString::Printf(TEXT("%d"), count), nullptr, FColor::White, -1.f, true);
+		}
 	}
 }
 
@@ -144,9 +162,12 @@ int CellSpace::PositionToIndex(FVector2D const & Pos) const
 	float localX = Pos.X - CellOrigin.X;
 	float localY = Pos.Y - CellOrigin.Y;
 
-	int col = FMath::Clamp(static_cast<int>(localX / CellWidth), 0, NrOfCols - 1);
-	int row = FMath::Clamp(static_cast<int>(localY / CellHeight), 0, NrOfRows - 1);
+	// skip agents outside grid bounds (return -1)
+	if (localX < 0.f || localX >= SpaceWidth || localY < 0.f || localY >= SpaceHeight)
+		return -1;
 
+	int col = static_cast<int>(localX / CellWidth);
+	int row = static_cast<int>(localY / CellHeight);
 	return row * NrOfCols + col;
 }
 
@@ -223,7 +244,7 @@ void QuadTree::Insert(ASteeringAgent* Agent)
 
 void QuadTree::InsertIntoNode(Node& node, ASteeringAgent* Agent)
 {
-	// clamp: if agent is outside this node's bounds, don't insert
+	// skip: if agent is outside this node's bounds, don't insert
 	FVector2D pos = Agent->GetPosition();
 	if (pos.X < node.Bounds.Min.X || pos.X > node.Bounds.Max.X ||
 		pos.Y < node.Bounds.Min.Y || pos.Y > node.Bounds.Max.Y)
@@ -297,6 +318,9 @@ void QuadTree::QueryNode(const Node& node, const FRect& QueryRect, const FVector
 
 void QuadTree::RenderCells(const std::vector<FRect>& QueriedLeaves) const
 {
+	// flush old debug strings so we don't hit the engine cap
+	FlushDebugStrings(pWorld);
+
 	RenderNode(*Root, QueriedLeaves);
 }
 
@@ -318,6 +342,18 @@ void QuadTree::RenderNode(const Node& node, const std::vector<FRect>& QueriedLea
 		FColor color = bHighlighted ? FColor::Red : FColor::Blue;
 		float thickness = bHighlighted ? 8.f : 5.f;
 		DrawRect(node.Bounds, color, thickness);
+
+		// draw agent count at center of leaf
+		int count = static_cast<int>(node.Agents.size());
+		if (count > 0)
+		{
+			FVector center{
+				(node.Bounds.Min.X + node.Bounds.Max.X) * 0.5f,
+				(node.Bounds.Min.Y + node.Bounds.Max.Y) * 0.5f,
+				91.f
+			};
+			DrawDebugString(pWorld, center, FString::Printf(TEXT("%d"), count), nullptr, FColor::White, -1.f, true);
+		}
 	}
 	else
 	{

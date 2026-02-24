@@ -3,9 +3,9 @@
 #pragma once
 
 #include "CoreMinimal.h"
-#include "Movement/SteeringBehaviors/Flocking/Flock.h"
 #include "Shared/Level_Base.h"
 #include "Movement/SteeringBehaviors/Steering/SteeringBehaviors.h"
+#include "Movement/SteeringBehaviors/SpacePartitioning/SpacePartitioning.h"
 #include <memory>
 #include "Level_SpacePartitioning.generated.h"
 
@@ -22,17 +22,50 @@ public:
 protected:
 	virtual void BeginPlay() override;
 
-	bool bUseMouseTarget{true};
-
-	int FlockSize{500};
-	int PendingFlockSize{500}; // slider value before apply
-	TUniquePtr<Flock> pFlock{};
-
-	ASteeringAgent* pAgentToEvade{nullptr}; // non owning, spawned in RebuildFlock
-
-	// wander behavior for the evade agent so it moves around
-	std::unique_ptr<Wander> pEvadeAgentWander{};
-
 private:
-	void RebuildFlock();
+	// behavior dropdown (applies to all agents at once)
+	enum class BehaviorTypes
+	{
+		Wander,
+		Seek,
+		Flee,
+		Arrive,
+
+		// @ End
+		Count
+	};
+
+	int SelectedBehavior{static_cast<int>(BehaviorTypes::Wander)};
+	int PreviousBehavior{static_cast<int>(BehaviorTypes::Wander)};
+
+	// agent management
+	int AgentCount{500};
+	int PendingAgentCount{500};
+	TArray<ASteeringAgent*> Agents{};
+	TArray<std::unique_ptr<ISteeringBehavior>> Behaviors{};
+
+	// spatial partitioning (owned directly)
+	std::unique_ptr<CellSpace> pCellSpace{};
+	std::unique_ptr<QuadTree> pQuadTree{};
+	TArray<FVector2D> OldPositions{};
+
+	bool bUseSpacePartitioning{false};
+	bool bUseHISP{false};
+
+	// debug
+	bool bDebugRenderSteering{false};
+	bool bDebugRenderNeighborhood{true};
+	bool bDebugRenderPartitions{true};
+
+	// neighbor query (for debug visualization)
+	float NeighborhoodRadius{350.f};
+	TArray<ASteeringAgent*> Neighbors{};
+	int NrOfNeighbors{0};
+
+	float WorldSize{3000.f};
+
+	void RebuildAgents();
+	void SetAllAgentsBehavior();
+	void RegisterNeighbors(ASteeringAgent* Agent);
+	void RenderDebug();
 };

@@ -4,9 +4,12 @@
 #include "Movement/SteeringBehaviors/SteeringAgent.h"
 #include "Movement/SteeringBehaviors/SteeringHelpers.h"
 #include "Movement/SteeringBehaviors/CombinedSteering/CombinedSteeringBehaviors.h"
-#include "Movement/SteeringBehaviors/SpacePartitioning/SpacePartitioning.h"
 #include <memory>
 #include "imgui.h"
+
+// forward declarations — avoid including SpacePartitioning.h in header
+class CellSpace;
+class QuadTree;
 
 class Flock final
 {

@@ -29,12 +29,13 @@ void ALevel_Flocking::BeginPlay()
 		pAgentToEvade->SetSteeringBehavior(pEvadeAgentWander.get());
 	}
 
+	// TrimWorldSize is box extent (half-size), so full play area diameter is double
 	pFlock = TUniquePtr<Flock>(
 		new Flock(
 			GetWorld(),
 			SteeringAgentClass,
 			FlockSize,
-			TrimWorld->GetTrimWorldSize(),
+			TrimWorld->GetTrimWorldSize() * 2.f,
 			pAgentToEvade,
 			true)
 			);

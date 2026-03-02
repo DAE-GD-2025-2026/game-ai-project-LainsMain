@@ -17,7 +17,7 @@ void ALevel_FlockSpacePartitioning::BeginPlay()
 
 void ALevel_FlockSpacePartitioning::RebuildFlock()
 {
-	TrimWorld->SetTrimWorldSize(4000.f);
+	TrimWorld->SetTrimWorldSize(3500.f);
 	TrimWorld->bShouldTrimWorld = true;
 
 	// destroy old evade agent if valid

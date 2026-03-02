@@ -85,8 +85,8 @@ private:
 
 	// UI and rendering
 	bool DebugRenderSteering{false};
-	bool DebugRenderNeighborhood{true};
-	bool DebugRenderPartitions{true};
+	bool DebugRenderNeighborhood{false};
+	bool DebugRenderPartitions{false};
 
 	void RenderNeighborhood();
 	void RegisterNeighbors_BruteForce(ASteeringAgent* const Agent);

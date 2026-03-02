@@ -301,6 +301,11 @@ void ALevel_SpacePartitioning::RenderDebug()
 		}
 		else if (pCellSpace)
 		{
+			// rebuild for accurate display counts
+			pCellSpace->EmptyCells();
+			for (int i = 0; i < Agents.Num(); ++i)
+				if (IsValid(Agents[i])) pCellSpace->AddAgent(*Agents[i]);
+
 			std::vector<int> highlighted;
 			if (bUseSpacePartitioning && Agents.Num() > 0 && IsValid(Agents[0]))
 			{

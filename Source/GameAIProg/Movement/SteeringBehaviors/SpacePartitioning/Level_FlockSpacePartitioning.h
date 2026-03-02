@@ -23,8 +23,8 @@ protected:
 
 	bool bUseMouseTarget{true};
 
-	int FlockSize{500};
-	int PendingFlockSize{500}; // slider value before apply
+	int FlockSize{100};
+	int PendingFlockSize{100}; // slider value before apply
 	TUniquePtr<Flock> pFlock{};
 
 	ASteeringAgent* pAgentToEvade{nullptr}; // non owning, spawned in RebuildFlock

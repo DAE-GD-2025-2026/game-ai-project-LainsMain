@@ -54,15 +54,15 @@ private:
 
 	// debug
 	bool bDebugRenderSteering{false};
-	bool bDebugRenderNeighborhood{true};
-	bool bDebugRenderPartitions{true};
+	bool bDebugRenderNeighborhood{false};
+	bool bDebugRenderPartitions{false};
 
 	// neighbor query (for debug visualization)
 	float NeighborhoodRadius{350.f};
 	TArray<ASteeringAgent*> Neighbors{};
 	int NrOfNeighbors{0};
 
-	float WorldSize{4000.f};
+	float WorldSize{3500.f};
 
 	void RebuildAgents();
 	void SetAllAgentsBehavior();
